@@ -1,61 +1,57 @@
-import sys
-import time
+import argparse
+import asyncio
 import csv
 from ping3 import ping
-import ipaddress
+import aiofiles
 
-def scan_ip_range(ip_range):
-    # Début du scan
-    print(f"Début du scan pour la plage d'IP: {ip_range}")
-    
-    active_ips = []
-    for ip in ipaddress.IPv4Network(ip_range).hosts():
-        ip_str = str(ip)
-        print(f"Scanning {ip_str}...")  # Imprimer l'IP qui est en train d'être scannée
-        response_time = ping(ip_str, timeout=1)
-        if response_time is not None:
-            print(f"{ip_str} Active (Ping: {response_time}ms)")  # Affichage si l'IP est active
-            active_ips.append((ip_str, "Active", response_time))
+async def scan_ip(ip: str, timeout: float = 1.0):
+    """Ping an IP address and return its status and response time."""
+    try:
+        response = await asyncio.to_thread(ping, ip, timeout=timeout, unit='ms')
+        if response is not None:
+            result = (ip, "Active", round(response, 2))
         else:
-            print(f"{ip_str} Inactive")  # Affichage si l'IP est inactive
-            active_ips.append((ip_str, "Inactive", ""))
+            result = (ip, "Inactive", None)
+    except Exception as e:
+        result = (ip, "Error", str(e))
     
-    return active_ips
+    # Affiche le résultat dans le shell en temps réel
+    print(f"IP: {result[0]}, Status: {result[1]}, Ping: {result[2]}")
+    return result
 
-def save_results_to_csv(results):
-    print("Sauvegarde des résultats dans results.csv...")  # Affichage de la sauvegarde
-    with open("results.csv", mode='w', newline='') as file:
+async def write_csv(filename: str, results: list):
+    """Write scan results to a CSV file."""
+    # Ouvre le fichier de manière synchrone pour éviter des erreurs avec csv.writer
+    with open(filename, mode='w', newline='') as file:
         writer = csv.writer(file)
-        writer.writerow(["IP", "Status", "Ping (ms)"])
+        writer.writerow(["IP", "Status", "Ping (ms)"])  # Écrit l'en-tête
         for result in results:
-            writer.writerow(result)
-    print("Sauvegarde terminée.")
+            writer.writerow(result)  # Écrit chaque ligne des résultats
+
+async def scan_file(filename: str):
+    """Scan IPs listed in a file."""
+    tasks = []
+    async with aiofiles.open(filename, mode='r') as file:
+        async for line in file:
+            ip = line.strip()
+            tasks.append(scan_ip(ip))  # Lance le scan pour chaque IP
+    return await asyncio.gather(*tasks)  # Attends que tous les scans soient terminés
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python .\\projetGaston.py scan --file ip_list.txt")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Network Scanner")
+    parser.add_argument("--file", type=str, required=True, help="File containing a list of IPs")
+    parser.add_argument("--output", type=str, default="results.csv", help="Output CSV file")
 
-    option = sys.argv[1]
-    if option == "scan":
-        # Assurez-vous d'utiliser --file ou --range correctement
-        if sys.argv[2] == "--file":
-            ip_file = sys.argv[3]
-            with open(ip_file, "r") as f:
-                ip_list = f.readlines()
-            ip_list = [ip.strip() for ip in ip_list]
-            for ip in ip_list:
-                response_time = ping(ip, timeout=1)
-                if response_time is not None:
-                    print(f"{ip} Active (Ping: {response_time}ms)")
-                else:
-                    print(f"{ip} Inactive")
-        elif sys.argv[2] == "--range":
-            ip_range = sys.argv[3]
-            results = scan_ip_range(ip_range)
-            save_results_to_csv(results)
-        else:
-            print("Option invalide. Utilisez --file ou --range.")
+    args = parser.parse_args()
+
+    if args.file:
+        file = args.file
+        results = asyncio.run(scan_file(file))  # Exécute la fonction de scan pour tous les IPs du fichier
+        print("Scan complete. Writing results to CSV...")
+        asyncio.run(write_csv(args.output, results))  # Écrit les résultats dans le fichier CSV
+        print(f"Results saved to {args.output}")
+    else:
+        print("Please specify a valid --file option.")
 
 if __name__ == "__main__":
     main()
